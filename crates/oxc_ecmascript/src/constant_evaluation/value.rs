@@ -4,7 +4,7 @@ use num_bigint::BigInt;
 
 use crate::ToJsString;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub enum ConstantValue<'a> {
     Number(f64),
     BigInt(BigInt),
@@ -32,6 +32,21 @@ impl<'a> ConstantValue<'a> {
 
     pub fn is_undefined(&self) -> bool {
         matches!(self, Self::Undefined)
+    }
+
+    pub fn boolean_true() -> Self {
+        Self::Boolean(true)
+    }
+
+    pub fn boolean_false() -> Self {
+        Self::Boolean(false)
+    }
+
+    pub fn boolean_not(self) -> Self {
+        match self {
+            Self::Boolean(b) => Self::Boolean(!b),
+            _ => self,
+        }
     }
 
     pub fn into_string(self) -> Option<Cow<'a, str>> {

@@ -2,7 +2,7 @@ mod is_litral_value;
 mod r#type;
 mod value;
 
-use std::borrow::Cow;
+use std::{borrow::Cow, cmp::Ordering};
 
 use num_bigint::BigInt;
 use num_traits::{One, Zero};
@@ -13,6 +13,11 @@ use oxc_ast::ast::*;
 use crate::{side_effects::MayHaveSideEffects, ToInt32, ToJsString};
 
 pub use self::{is_litral_value::IsLiteralValue, r#type::ValueType, value::ConstantValue};
+
+enum MaybeConstantValue<'a, 'b> {
+    ConstantValue(ConstantValue<'a>),
+    Expression(&'b Expression<'a>),
+}
 
 pub trait ConstantEvaluation<'a> {
     fn is_global_reference(&self, ident: &IdentifierReference<'a>) -> bool {
@@ -41,6 +46,31 @@ pub trait ConstantEvaluation<'a> {
         } else {
             value
         }
+    }
+
+    fn get_side_free_bigint_value(&self, expr: &Expression<'a>) -> Option<BigInt> {
+        let value = self.eval_to_big_int(expr);
+        // Calculating the bigint value, if any, is likely to be faster than calculating side effects,
+        // and there are only a very few cases where we can compute a bigint value, but there could
+        // also be side effects. e.g. `void doSomething()` has value NaN, regardless of the behavior
+        // of `doSomething()`
+        if value.is_some() && expr.may_have_side_effects() {
+            None
+        } else {
+            value
+        }
+    }
+
+    fn get_side_free_string_value(&self, expr: &Expression<'a>) -> Option<Cow<'a, str>> {
+        let value = expr.to_js_string();
+        // Calculating the string value, if any, is likely to be faster than calculating side effects,
+        // and there are only a very few cases where we can compute a string value, but there could
+        // also be side effects. e.g. `void doSomething()` has value 'undefined', regardless of the
+        // behavior of `doSomething()`
+        if value.is_some() && !expr.may_have_side_effects() {
+            return value;
+        }
+        None
     }
 
     fn eval_to_boolean(&self, expr: &Expression<'a>) -> Option<bool> {
@@ -261,7 +291,50 @@ pub trait ConstantEvaluation<'a> {
                 }
                 None
             }
-            _ => None,
+            BinaryOperator::Equality
+            | BinaryOperator::Inequality
+            | BinaryOperator::StrictEquality
+            | BinaryOperator::StrictInequality
+            | BinaryOperator::LessThan
+            | BinaryOperator::LessEqualThan
+            | BinaryOperator::GreaterThan
+            | BinaryOperator::GreaterEqualThan => {
+                let left = &expr.left;
+                let right = &expr.right;
+                if left.may_have_side_effects() || right.may_have_side_effects() {
+                    return None;
+                }
+                match expr.operator {
+                    BinaryOperator::Equality => self.try_abstract_equality_comparison(left, right),
+                    BinaryOperator::Inequality => self
+                        .try_abstract_equality_comparison(left, right)
+                        .map(ConstantValue::boolean_not),
+                    BinaryOperator::StrictEquality => {
+                        self.try_strict_equality_comparison(left, right)
+                    }
+                    BinaryOperator::StrictInequality => self
+                        .try_strict_equality_comparison(left, right)
+                        .map(ConstantValue::boolean_not),
+                    BinaryOperator::LessThan => {
+                        self.try_abstract_relational_comparison(left, right, false)
+                    }
+                    BinaryOperator::GreaterThan => {
+                        self.try_abstract_relational_comparison(right, left, false)
+                    }
+                    BinaryOperator::LessEqualThan => self
+                        .try_abstract_relational_comparison(right, left, true)
+                        .map(ConstantValue::boolean_not),
+                    BinaryOperator::GreaterEqualThan => self
+                        .try_abstract_relational_comparison(left, right, true)
+                        .map(ConstantValue::boolean_not),
+                    _ => unreachable!(),
+                }
+            }
+            BinaryOperator::BitwiseAnd | BinaryOperator::BitwiseOR | BinaryOperator::BitwiseXOR => {
+                // TODO
+                None
+            }
+            BinaryOperator::Instanceof | BinaryOperator::In => None,
         }
     }
 
@@ -356,4 +429,271 @@ pub trait ConstantEvaluation<'a> {
             UnaryOperator::Delete => None,
         }
     }
+
+    /// <https://tc39.es/ecma262/#sec-abstract-equality-comparison>
+    fn try_abstract_equality_comparison(
+        &self,
+        left_expr: ConstantValue<'a>,
+        right_expr: ConstantValue<'a>,
+    ) -> Option<ConstantValue<'a>> {
+        // let left = ValueType::from(left_expr);
+        // let right = ValueType::from(right_expr);
+        if left != ValueType::Undetermined && right != ValueType::Undetermined {
+            if left == right {
+                return self.try_strict_equality_comparison(left_expr, right_expr);
+            }
+            if matches!(
+                (left, right),
+                (ValueType::Null, ValueType::Undefined) | (ValueType::Undefined, ValueType::Null)
+            ) {
+                return Some(ConstantValue::boolean_true());
+            }
+
+            if matches!((left, right), (ValueType::Number, ValueType::String))
+                || matches!(right, ValueType::Boolean)
+            {
+                let right_number = self.get_side_free_number_value(right_expr);
+                if let Some(num) = right_number {
+                    // TODO
+                    // let number_literal_expr = NumericLiteral {
+                    // span: Default::default(),
+                    // value: num,
+                    // raw: "",
+                    // base: if num.fract() == 0.0 {
+                    // NumberBase::Decimal
+                    // } else {
+                    // NumberBase::Float
+                    // },
+                    // };
+
+                    // return Self::try_abstract_equality_comparison(
+                    // left_expr,
+                    // &number_literal_expr,
+                    // ctx,
+                    // );
+                }
+                return None;
+            }
+
+            if matches!((left, right), (ValueType::String, ValueType::Number))
+                || matches!(left, ValueType::Boolean)
+            {
+                let left_number = self.get_side_free_number_value(left_expr);
+                if let Some(num) = left_number {
+                    // TODO
+                    // let number_literal_expr = self.ast.expression_numeric_literal(
+                    // left_expr.span(),
+                    // num,
+                    // num.to_string(),
+                    // if num.fract() == 0.0 { NumberBase::Decimal } else { NumberBase::Float },
+                    // );
+                    // return Self::try_abstract_equality_comparison(
+                    // &number_literal_expr,
+                    // right_expr,
+                    // ctx,
+                    // );
+                }
+                return None;
+            }
+            if matches!(left, ValueType::BigInt) || matches!(right, ValueType::BigInt) {
+                let left_bigint = self.get_side_free_bigint_value(left_expr);
+                let right_bigint = self.get_side_free_bigint_value(right_expr);
+                if let (Some(l_big), Some(r_big)) = (left_bigint, right_bigint) {
+                    return Some(ConstantValue::Boolean(l_big.eq(&r_big)));
+                }
+            }
+            if matches!(left, ValueType::String | ValueType::Number)
+                && matches!(right, ValueType::Object)
+            {
+                return None;
+            }
+            if matches!(left, ValueType::Object)
+                && matches!(right, ValueType::String | ValueType::Number)
+            {
+                return None;
+            }
+            return Some(ConstantValue::boolean_false());
+        }
+        None
+    }
+
+    /// <https://tc39.es/ecma262/#sec-strict-equality-comparison>
+    #[expect(clippy::float_cmp)]
+    fn try_strict_equality_comparison(
+        &self,
+        left_expr: &Expression<'a>,
+        right_expr: &Expression<'a>,
+    ) -> Option<ConstantValue<'a>> {
+        let left = ValueType::from(left_expr);
+        let right = ValueType::from(right_expr);
+        if left != ValueType::Undetermined && right != ValueType::Undetermined {
+            // Strict equality can only be true for values of the same type.
+            if left != right {
+                return Some(ConstantValue::boolean_false());
+            }
+            return match left {
+                ValueType::Number => {
+                    let left_number = self.get_side_free_number_value(left_expr);
+                    let right_number = self.get_side_free_number_value(right_expr);
+                    if let (Some(l_num), Some(r_num)) = (left_number, right_number) {
+                        if l_num.is_nan() || r_num.is_nan() {
+                            return Some(ConstantValue::boolean_false());
+                        }
+
+                        return Some(ConstantValue::Boolean(l_num == r_num));
+                    }
+                    None
+                }
+                ValueType::String => {
+                    let left_string = self.get_side_free_string_value(left_expr);
+                    let right_string = self.get_side_free_string_value(right_expr);
+                    if let (Some(left_string), Some(right_string)) = (left_string, right_string) {
+                        // In JS, browsers parse \v differently. So do not compare strings if one contains \v.
+                        if left_string.contains('\u{000B}') || right_string.contains('\u{000B}') {
+                            return None;
+                        }
+                        return Some(ConstantValue::Boolean(left_string == right_string));
+                    }
+
+                    if let (Expression::UnaryExpression(left), Expression::UnaryExpression(right)) =
+                        (left_expr, right_expr)
+                    {
+                        if (left.operator, right.operator)
+                            == (UnaryOperator::Typeof, UnaryOperator::Typeof)
+                        {
+                            if let (Expression::Identifier(left), Expression::Identifier(right)) =
+                                (&left.argument, &right.argument)
+                            {
+                                if left.name == right.name {
+                                    // Special case, typeof a == typeof a is always true.
+                                    return Some(ConstantValue::boolean_true());
+                                }
+                            }
+                        }
+                    }
+                    None
+                }
+                ValueType::Undefined | ValueType::Null => Some(ConstantValue::boolean_true()),
+                _ => None,
+            };
+        }
+        // Then, try to evaluate based on the value of the expression.
+        // There's only one special case:
+        // Any strict equality comparison against NaN returns false.
+        if left_expr.is_nan() || right_expr.is_nan() {
+            return Some(ConstantValue::boolean_false());
+        }
+        None
+    }
+
+    /// <https://tc39.es/ecma262/#sec-abstract-relational-comparison>
+    fn try_abstract_relational_comparison(
+        &self,
+        left_expr: &Expression<'a>,
+        right_expr: &Expression<'a>,
+        will_negate: bool,
+    ) -> Option<ConstantValue<'a>> {
+        let left = ValueType::from(left_expr);
+        let right = ValueType::from(right_expr);
+
+        // First, check for a string comparison.
+        if left == ValueType::String && right == ValueType::String {
+            let left_string = self.get_side_free_string_value(left_expr);
+            let right_string = self.get_side_free_string_value(right_expr);
+            if let (Some(left_string), Some(right_string)) = (left_string, right_string) {
+                // In JS, browsers parse \v differently. So do not compare strings if one contains \v.
+                if left_string.contains('\u{000B}') || right_string.contains('\u{000B}') {
+                    return None;
+                }
+                return Some(ConstantValue::Boolean(
+                    left_string.cmp(&right_string) == Ordering::Less,
+                ));
+            }
+
+            if let (Expression::UnaryExpression(left), Expression::UnaryExpression(right)) =
+                (left_expr, right_expr)
+            {
+                if (left.operator, right.operator) == (UnaryOperator::Typeof, UnaryOperator::Typeof)
+                {
+                    if let (Expression::Identifier(left), Expression::Identifier(right)) =
+                        (&left.argument, &right.argument)
+                    {
+                        if left.name == right.name {
+                            // Special case: `typeof a < typeof a` is always false.
+                            return Some(ConstantValue::boolean_false());
+                        }
+                    }
+                }
+            }
+        }
+
+        let left_bigint = self.get_side_free_bigint_value(left_expr);
+        let right_bigint = self.get_side_free_bigint_value(right_expr);
+
+        let left_num = self.get_side_free_number_value(left_expr);
+        let right_num = self.get_side_free_number_value(right_expr);
+
+        match (left_bigint, right_bigint, left_num, right_num) {
+            // Next, try to evaluate based on the value of the node. Try comparing as BigInts first.
+            (Some(l_big), Some(r_big), _, _) => {
+                return Some(ConstantValue::Boolean(l_big < r_big));
+            }
+            // try comparing as Numbers.
+            (_, _, Some(l_num), Some(r_num)) => {
+                return if l_num.is_nan() || r_num.is_nan() {
+                    Some(ConstantValue::Boolean(will_negate))
+                } else {
+                    Some(ConstantValue::Boolean(l_num < r_num))
+                }
+            }
+            // Finally, try comparisons between BigInt and Number.
+            (Some(l_big), _, _, Some(r_num)) => {
+                return None;
+                // return Self::bigint_less_than_number(&l_big, r_num, Tri::False, will_negate);
+            }
+            (_, Some(r_big), Some(l_num), _) => {
+                return None;
+                // return Self::bigint_less_than_number(&r_big, l_num, Tri::True, will_negate);
+            }
+            _ => {}
+        }
+        None
+    }
+
+    // #[allow(clippy::cast_possible_truncation)]
+    // pub fn bigint_less_than_number(
+    // bigint_value: &BigInt,
+    // number_value: f64,
+    // invert: Tri,
+    // will_negative: bool,
+    // ) -> Tri {
+    // // if invert is false, then the number is on the right in tryAbstractRelationalComparison
+    // // if it's true, then the number is on the left
+    // match number_value {
+    // v if v.is_nan() => Tri::from(will_negative),
+    // v if v.is_infinite() && v.is_sign_positive() => Tri::True.xor(invert),
+    // v if v.is_infinite() && v.is_sign_negative() => Tri::False.xor(invert),
+    // num => {
+    // if let Some(Ordering::Equal | Ordering::Greater) =
+    // num.abs().partial_cmp(&2_f64.powi(53))
+    // {
+    // Tri::Unknown
+    // } else {
+    // let number_as_bigint = BigInt::from(num as i64);
+
+    // match bigint_value.cmp(&number_as_bigint) {
+    // Ordering::Less => Tri::True.xor(invert),
+    // Ordering::Greater => Tri::False.xor(invert),
+    // Ordering::Equal => {
+    // if is_exact_int64(num) {
+    // Tri::False
+    // } else {
+    // Tri::from(num.is_sign_positive()).xor(invert)
+    // }
+    // }
+    // }
+    // }
+    // }
+    // }
+    // }
 }

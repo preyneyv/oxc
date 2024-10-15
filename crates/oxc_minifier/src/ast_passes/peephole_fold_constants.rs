@@ -7,11 +7,8 @@ use oxc_ecmascript::{
     constant_evaluation::{ConstantEvaluation, ConstantValue, ValueType},
     side_effects::MayHaveSideEffects,
 };
-use oxc_span::{GetSpan, Span, SPAN};
-use oxc_syntax::{
-    number::NumberBase,
-    operator::{BinaryOperator, LogicalOperator, UnaryOperator},
-};
+use oxc_span::{Span, SPAN};
+use oxc_syntax::operator::{BinaryOperator, LogicalOperator, UnaryOperator};
 use oxc_traverse::{Ancestor, Traverse, TraverseCtx};
 
 use crate::{
@@ -240,10 +237,18 @@ impl<'a, 'b> PeepholeFoldConstants {
     ) -> Option<Expression<'a>> {
         // TODO: tryReduceOperandsForOp
         match e.operator {
-            op if op.is_bitshift() => {
-                ctx.eval_binary_expression(e).map(|v| ctx.value_to_expr(e.span, v))
-            }
-            BinaryOperator::Addition => {
+            BinaryOperator::ShiftLeft
+            | BinaryOperator::ShiftRight
+            | BinaryOperator::ShiftRightZeroFill
+            | BinaryOperator::Addition
+            | BinaryOperator::Equality
+            | BinaryOperator::Inequality
+            | BinaryOperator::StrictEquality
+            | BinaryOperator::StrictInequality
+            | BinaryOperator::LessThan
+            | BinaryOperator::LessEqualThan
+            | BinaryOperator::GreaterThan
+            | BinaryOperator::GreaterEqualThan => {
                 ctx.eval_binary_expression(e).map(|v| ctx.value_to_expr(e.span, v))
             }
             BinaryOperator::Subtraction
@@ -259,9 +264,6 @@ impl<'a, 'b> PeepholeFoldConstants {
                 // }
                 // return tryFoldLeftChildOp(subtree, left, right);
                 None
-            }
-            op if op.is_equality() || op.is_compare() => {
-                Self::try_fold_comparison(e.span, e.operator, &e.left, &e.right, ctx)
             }
             _ => None,
         }
@@ -304,332 +306,6 @@ impl<'a, 'b> PeepholeFoldConstants {
             return Some(ctx.value_to_expr(expr.span, value));
         }
         None
-    }
-
-    fn try_fold_comparison(
-        span: Span,
-        op: BinaryOperator,
-        left: &'b Expression<'a>,
-        right: &'b Expression<'a>,
-        ctx: Ctx<'a, 'b>,
-    ) -> Option<Expression<'a>> {
-        let value = match Self::evaluate_comparison(op, left, right, ctx) {
-            Tri::True => true,
-            Tri::False => false,
-            Tri::Unknown => return None,
-        };
-        Some(ctx.ast.expression_boolean_literal(span, value))
-    }
-
-    fn evaluate_comparison(
-        op: BinaryOperator,
-        left: &'b Expression<'a>,
-        right: &'b Expression<'a>,
-        ctx: Ctx<'a, 'b>,
-    ) -> Tri {
-        if left.may_have_side_effects() || right.may_have_side_effects() {
-            return Tri::Unknown;
-        }
-        match op {
-            BinaryOperator::Equality => Self::try_abstract_equality_comparison(left, right, ctx),
-            BinaryOperator::Inequality => {
-                Self::try_abstract_equality_comparison(left, right, ctx).not()
-            }
-            BinaryOperator::StrictEquality => {
-                Self::try_strict_equality_comparison(left, right, ctx)
-            }
-            BinaryOperator::StrictInequality => {
-                Self::try_strict_equality_comparison(left, right, ctx).not()
-            }
-            BinaryOperator::LessThan => {
-                Self::try_abstract_relational_comparison(left, right, false, ctx)
-            }
-            BinaryOperator::GreaterThan => {
-                Self::try_abstract_relational_comparison(right, left, false, ctx)
-            }
-            BinaryOperator::LessEqualThan => {
-                Self::try_abstract_relational_comparison(right, left, true, ctx).not()
-            }
-            BinaryOperator::GreaterEqualThan => {
-                Self::try_abstract_relational_comparison(left, right, true, ctx).not()
-            }
-            _ => Tri::Unknown,
-        }
-    }
-
-    /// <https://tc39.es/ecma262/#sec-abstract-equality-comparison>
-    fn try_abstract_equality_comparison(
-        left_expr: &'b Expression<'a>,
-        right_expr: &'b Expression<'a>,
-        ctx: Ctx<'a, 'b>,
-    ) -> Tri {
-        let left = ValueType::from(left_expr);
-        let right = ValueType::from(right_expr);
-        if left != ValueType::Undetermined && right != ValueType::Undetermined {
-            if left == right {
-                return Self::try_strict_equality_comparison(left_expr, right_expr, ctx);
-            }
-            if matches!(
-                (left, right),
-                (ValueType::Null, ValueType::Undefined) | (ValueType::Undefined, ValueType::Null)
-            ) {
-                return Tri::True;
-            }
-
-            if matches!((left, right), (ValueType::Number, ValueType::String))
-                || matches!(right, ValueType::Boolean)
-            {
-                let right_number = ctx.get_side_free_number_value(right_expr);
-
-                if let Some(num) = right_number {
-                    let number_literal_expr = ctx.ast.expression_numeric_literal(
-                        right_expr.span(),
-                        num,
-                        num.to_string(),
-                        if num.fract() == 0.0 { NumberBase::Decimal } else { NumberBase::Float },
-                    );
-
-                    return Self::try_abstract_equality_comparison(
-                        left_expr,
-                        &number_literal_expr,
-                        ctx,
-                    );
-                }
-
-                return Tri::Unknown;
-            }
-
-            if matches!((left, right), (ValueType::String, ValueType::Number))
-                || matches!(left, ValueType::Boolean)
-            {
-                let left_number = ctx.get_side_free_number_value(left_expr);
-
-                if let Some(num) = left_number {
-                    let number_literal_expr = ctx.ast.expression_numeric_literal(
-                        left_expr.span(),
-                        num,
-                        num.to_string(),
-                        if num.fract() == 0.0 { NumberBase::Decimal } else { NumberBase::Float },
-                    );
-
-                    return Self::try_abstract_equality_comparison(
-                        &number_literal_expr,
-                        right_expr,
-                        ctx,
-                    );
-                }
-
-                return Tri::Unknown;
-            }
-
-            if matches!(left, ValueType::BigInt) || matches!(right, ValueType::BigInt) {
-                let left_bigint = ctx.get_side_free_bigint_value(left_expr);
-                let right_bigint = ctx.get_side_free_bigint_value(right_expr);
-
-                if let (Some(l_big), Some(r_big)) = (left_bigint, right_bigint) {
-                    return Tri::from(l_big.eq(&r_big));
-                }
-            }
-
-            if matches!(left, ValueType::String | ValueType::Number)
-                && matches!(right, ValueType::Object)
-            {
-                return Tri::Unknown;
-            }
-
-            if matches!(left, ValueType::Object)
-                && matches!(right, ValueType::String | ValueType::Number)
-            {
-                return Tri::Unknown;
-            }
-
-            return Tri::False;
-        }
-        Tri::Unknown
-    }
-
-    /// <https://tc39.es/ecma262/#sec-abstract-relational-comparison>
-    fn try_abstract_relational_comparison(
-        left_expr: &'b Expression<'a>,
-        right_expr: &'b Expression<'a>,
-        will_negative: bool,
-        ctx: Ctx<'a, 'b>,
-    ) -> Tri {
-        let left = ValueType::from(left_expr);
-        let right = ValueType::from(right_expr);
-
-        // First, check for a string comparison.
-        if left == ValueType::String && right == ValueType::String {
-            let left_string = ctx.get_side_free_string_value(left_expr);
-            let right_string = ctx.get_side_free_string_value(right_expr);
-            if let (Some(left_string), Some(right_string)) = (left_string, right_string) {
-                // In JS, browsers parse \v differently. So do not compare strings if one contains \v.
-                if left_string.contains('\u{000B}') || right_string.contains('\u{000B}') {
-                    return Tri::Unknown;
-                }
-
-                return Tri::from(left_string.cmp(&right_string) == Ordering::Less);
-            }
-
-            if let (Expression::UnaryExpression(left), Expression::UnaryExpression(right)) =
-                (left_expr, right_expr)
-            {
-                if (left.operator, right.operator) == (UnaryOperator::Typeof, UnaryOperator::Typeof)
-                {
-                    if let (Expression::Identifier(left), Expression::Identifier(right)) =
-                        (&left.argument, &right.argument)
-                    {
-                        if left.name == right.name {
-                            // Special case: `typeof a < typeof a` is always false.
-                            return Tri::False;
-                        }
-                    }
-                }
-            }
-        }
-
-        let left_bigint = ctx.get_side_free_bigint_value(left_expr);
-        let right_bigint = ctx.get_side_free_bigint_value(right_expr);
-
-        let left_num = ctx.get_side_free_number_value(left_expr);
-        let right_num = ctx.get_side_free_number_value(right_expr);
-
-        match (left_bigint, right_bigint, left_num, right_num) {
-            // Next, try to evaluate based on the value of the node. Try comparing as BigInts first.
-            (Some(l_big), Some(r_big), _, _) => {
-                return Tri::from(l_big < r_big);
-            }
-            // try comparing as Numbers.
-            (_, _, Some(l_num), Some(r_num)) => {
-                return if l_num.is_nan() || r_num.is_nan() {
-                    Tri::from(will_negative)
-                } else {
-                    Tri::from(l_num < r_num)
-                }
-            }
-            // Finally, try comparisons between BigInt and Number.
-            (Some(l_big), _, _, Some(r_num)) => {
-                return Self::bigint_less_than_number(&l_big, r_num, Tri::False, will_negative);
-            }
-            (_, Some(r_big), Some(l_num), _) => {
-                return Self::bigint_less_than_number(&r_big, l_num, Tri::True, will_negative);
-            }
-            _ => {}
-        }
-
-        Tri::Unknown
-    }
-
-    /// ported from [closure compiler](https://github.com/google/closure-compiler/blob/master/src/com/google/javascript/jscomp/PeepholeFoldConstants.java#L1250)
-    #[allow(clippy::cast_possible_truncation)]
-    pub fn bigint_less_than_number(
-        bigint_value: &BigInt,
-        number_value: f64,
-        invert: Tri,
-        will_negative: bool,
-    ) -> Tri {
-        // if invert is false, then the number is on the right in tryAbstractRelationalComparison
-        // if it's true, then the number is on the left
-        match number_value {
-            v if v.is_nan() => Tri::from(will_negative),
-            v if v.is_infinite() && v.is_sign_positive() => Tri::True.xor(invert),
-            v if v.is_infinite() && v.is_sign_negative() => Tri::False.xor(invert),
-            num => {
-                if let Some(Ordering::Equal | Ordering::Greater) =
-                    num.abs().partial_cmp(&2_f64.powi(53))
-                {
-                    Tri::Unknown
-                } else {
-                    let number_as_bigint = BigInt::from(num as i64);
-
-                    match bigint_value.cmp(&number_as_bigint) {
-                        Ordering::Less => Tri::True.xor(invert),
-                        Ordering::Greater => Tri::False.xor(invert),
-                        Ordering::Equal => {
-                            if is_exact_int64(num) {
-                                Tri::False
-                            } else {
-                                Tri::from(num.is_sign_positive()).xor(invert)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /// <https://tc39.es/ecma262/#sec-strict-equality-comparison>
-    #[expect(clippy::float_cmp)]
-    fn try_strict_equality_comparison(
-        left_expr: &'b Expression<'a>,
-        right_expr: &'b Expression<'a>,
-        ctx: Ctx<'a, 'b>,
-    ) -> Tri {
-        let left = ValueType::from(left_expr);
-        let right = ValueType::from(right_expr);
-        if left != ValueType::Undetermined && right != ValueType::Undetermined {
-            // Strict equality can only be true for values of the same type.
-            if left != right {
-                return Tri::False;
-            }
-            return match left {
-                ValueType::Number => {
-                    let left_number = ctx.get_side_free_number_value(left_expr);
-                    let right_number = ctx.get_side_free_number_value(right_expr);
-
-                    if let (Some(l_num), Some(r_num)) = (left_number, right_number) {
-                        if l_num.is_nan() || r_num.is_nan() {
-                            return Tri::False;
-                        }
-
-                        return Tri::from(l_num == r_num);
-                    }
-
-                    Tri::Unknown
-                }
-                ValueType::String => {
-                    let left_string = ctx.get_side_free_string_value(left_expr);
-                    let right_string = ctx.get_side_free_string_value(right_expr);
-                    if let (Some(left_string), Some(right_string)) = (left_string, right_string) {
-                        // In JS, browsers parse \v differently. So do not compare strings if one contains \v.
-                        if left_string.contains('\u{000B}') || right_string.contains('\u{000B}') {
-                            return Tri::Unknown;
-                        }
-
-                        return Tri::from(left_string == right_string);
-                    }
-
-                    if let (Expression::UnaryExpression(left), Expression::UnaryExpression(right)) =
-                        (left_expr, right_expr)
-                    {
-                        if (left.operator, right.operator)
-                            == (UnaryOperator::Typeof, UnaryOperator::Typeof)
-                        {
-                            if let (Expression::Identifier(left), Expression::Identifier(right)) =
-                                (&left.argument, &right.argument)
-                            {
-                                if left.name == right.name {
-                                    // Special case, typeof a == typeof a is always true.
-                                    return Tri::True;
-                                }
-                            }
-                        }
-                    }
-
-                    Tri::Unknown
-                }
-                ValueType::Undefined | ValueType::Null => Tri::True,
-                _ => Tri::Unknown,
-            };
-        }
-
-        // Then, try to evaluate based on the value of the expression.
-        // There's only one special case:
-        // Any strict equality comparison against NaN returns false.
-        if left_expr.is_nan() || right_expr.is_nan() {
-            return Tri::False;
-        }
-        Tri::Unknown
     }
 }
 
