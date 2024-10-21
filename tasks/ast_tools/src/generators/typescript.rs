@@ -16,8 +16,6 @@ use crate::{
     Generator, GeneratorOutput,
 };
 
-// TODO: Generate directly to types.d.ts instead of relying on wasm-bindgen
-
 define_generator! {
     pub struct TypescriptGenerator;
 }
@@ -25,7 +23,7 @@ define_generator! {
 impl Generator for TypescriptGenerator {
     fn generate(&mut self, ctx: &LateCtx) -> GeneratorOutput {
         let file = file!().replace('\\', "/");
-        let mut contents = format!(
+        let mut content = format!(
             "\
         		// To edit this generated file you have to edit `{file}`\n\
         		// Auto-generated code, DO NOT EDIT DIRECTLY!\n\n"
@@ -35,31 +33,40 @@ impl Generator for TypescriptGenerator {
             if !def.generates_derive("ESTree") {
                 continue;
             }
-            let type_def = match def {
-                TypeDef::Struct(it) => generate_struct(it),
-                TypeDef::Enum(it) => generate_enum(it),
+            let ts_type_def = match def {
+                TypeDef::Struct(it) => Some(typescript_struct(it)),
+                TypeDef::Enum(it) => typescript_enum(it),
             };
-            contents.push_str(&type_def);
-            contents.push_str("\n\n");
-        }
+            let Some(ts_type_def) = ts_type_def else { continue };
 
-        GeneratorOutput::Raw(output(crate::TYPESCRIPT_PACKAGE, "types.d.ts"), contents)
+            content.push_str(&ts_type_def);
+            content.push_str("\n\n");
+        }
+        GeneratorOutput::Text {
+            path: output(crate::TYPESCRIPT_PACKAGE, "types.d.ts"),
+            // content: format_typescript(&content),
+            content,
+        }
     }
 }
 
 // Untagged enums: "type Expression = BooleanLiteral | NullLiteral"
 // Tagged enums: "type PropertyKind = 'init' | 'get' | 'set'"
-fn generate_enum(def: &EnumDef) -> String {
+fn typescript_enum(def: &EnumDef) -> Option<String> {
+    if def.markers.estree.custom_ts_def {
+        return None;
+    }
+
     let union = if def.markers.estree.untagged {
         def.all_variants().map(|var| type_to_string(var.fields[0].typ.name())).join(" | ")
     } else {
         def.all_variants().map(|var| format!("'{}'", enum_variant_name(var, def))).join(" | ")
     };
     let ident = def.ident();
-    format!("export type {ident} = {union};")
+    Some(format!("export type {ident} = {union};"))
 }
 
-fn generate_struct(def: &StructDef) -> String {
+fn typescript_struct(def: &StructDef) -> String {
     let ident = def.ident();
     let mut fields = String::new();
     let mut extends = vec![];
@@ -113,7 +120,7 @@ fn type_to_string(ty: &TypeName) -> String {
 }
 
 /// Unusable until oxc_prettier supports comments
-#[allow(dead_code)]
+#[expect(dead_code)]
 fn format_typescript(source_text: &str) -> String {
     let allocator = Allocator::default();
     let source_type = SourceType::ts();
@@ -122,8 +129,6 @@ fn format_typescript(source_text: &str) -> String {
         .parse();
     Prettier::new(
         &allocator,
-        source_text,
-        ret.trivias,
         PrettierOptions {
             semi: true,
             trailing_comma: TrailingComma::All,
