@@ -12,9 +12,9 @@
     "oxc_wasm.js",
     "oxc_wasm.d.ts"
   ],
-	"devDependencies": {
-		"@types/oxc": "workspace:^"
-	},
+  "devDependencies": {
+    "@types/oxc": "workspace:^"
+  },
   "main": "oxc_wasm.js",
   "types": "oxc_wasm.d.ts",
   "sideEffects": [
