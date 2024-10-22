@@ -75,7 +75,7 @@ importers:
   npm/parser-wasm:
     devDependencies:
       '@types/oxc':
-        specifier: link:../oxc-types
+        specifier: workspace:^
         version: link:../oxc-types
 
   tasks/benchmark/codspeed:
