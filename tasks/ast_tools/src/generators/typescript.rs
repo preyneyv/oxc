@@ -1,9 +1,9 @@
 use convert_case::{Case, Casing};
 use itertools::Itertools;
-use oxc_allocator::Allocator;
-use oxc_parser::{ParseOptions, Parser};
-use oxc_prettier::{Prettier, PrettierOptions, TrailingComma};
-use oxc_span::SourceType;
+use std::{
+    io::Write,
+    process::{Command, Stdio},
+};
 
 use super::define_generator;
 use crate::{
@@ -16,6 +16,8 @@ use crate::{
     Generator, GeneratorOutput,
 };
 
+const CUSTOM_TYPESCRIPT: &str = include_str!("../../../../crates/oxc_ast/src/ast/types.d.ts");
+
 define_generator! {
     pub struct TypescriptGenerator;
 }
@@ -26,7 +28,9 @@ impl Generator for TypescriptGenerator {
         let mut content = format!(
             "\
         		// To edit this generated file you have to edit `{file}`\n\
-        		// Auto-generated code, DO NOT EDIT DIRECTLY!\n\n"
+        		// Auto-generated code, DO NOT EDIT DIRECTLY!\n\n\
+						{CUSTOM_TYPESCRIPT}\n\
+						"
         );
 
         for def in ctx.schema() {
@@ -44,8 +48,7 @@ impl Generator for TypescriptGenerator {
         }
         GeneratorOutput::Text {
             path: output(crate::TYPESCRIPT_PACKAGE, "types.d.ts"),
-            // content: format_typescript(&content),
-            content,
+            content: format_typescript(&content),
         }
     }
 }
@@ -96,9 +99,21 @@ fn typescript_struct(def: &StructDef) -> String {
 
         fields.push_str(&format!("\n\t{name}: {ty};"));
     }
-    let extends =
-        if extends.is_empty() { String::new() } else { format!(" & {}", extends.join(" & ")) };
-    format!("export type {ident} = ({{{fields}\n}}){extends};")
+
+    let extends_union = extends.iter().any(|it| it.contains('|'));
+
+    if extends_union {
+        let extends =
+            if extends.is_empty() { String::new() } else { format!(" & {}", extends.join(" & ")) };
+        format!("export type {ident} = ({{{fields}\n}}){extends};")
+    } else {
+        let extends = if extends.is_empty() {
+            String::new()
+        } else {
+            format!(" extends {}", extends.join(", "))
+        };
+        format!("export interface {ident}{extends} {{{fields}\n}}")
+    }
 }
 
 fn type_to_string(ty: &TypeName) -> String {
@@ -119,22 +134,37 @@ fn type_to_string(ty: &TypeName) -> String {
     }
 }
 
-/// Unusable until oxc_prettier supports comments
-#[expect(dead_code)]
 fn format_typescript(source_text: &str) -> String {
-    let allocator = Allocator::default();
-    let source_type = SourceType::ts();
-    let ret = Parser::new(&allocator, source_text, source_type)
-        .with_options(ParseOptions { preserve_parens: false, ..ParseOptions::default() })
-        .parse();
-    Prettier::new(
-        &allocator,
-        PrettierOptions {
-            semi: true,
-            trailing_comma: TrailingComma::All,
-            single_quote: true,
-            ..PrettierOptions::default()
-        },
-    )
-    .build(&ret.program)
+    let mut dprint = Command::new("dprint")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .args(["fmt", "--stdin", "types.d.ts"])
+        .spawn()
+        .expect("Failed to run dprint (is it installed?)");
+
+    let stdin = dprint.stdin.as_mut().unwrap();
+    stdin.write_all(source_text.as_bytes()).unwrap();
+    stdin.flush().unwrap();
+
+    let output = dprint.wait_with_output().unwrap();
+    String::from_utf8(output.stdout).unwrap()
 }
+
+// Unusable until oxc_prettier supports comments
+// fn format_typescript(source_text: &str) -> String {
+//     let allocator = Allocator::default();
+//     let source_type = SourceType::ts();
+//     let ret = Parser::new(&allocator, source_text, source_type)
+//         .with_options(ParseOptions { preserve_parens: false, ..ParseOptions::default() })
+//         .parse();
+//     Prettier::new(
+//         &allocator,
+//         PrettierOptions {
+//             semi: true,
+//             trailing_comma: TrailingComma::All,
+//             single_quote: true,
+//             ..PrettierOptions::default()
+//         },
+//     )
+//     .build(&ret.program)
+// }
