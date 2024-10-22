@@ -135,9 +135,10 @@ jobs:
         run: |
           just build-wasm debug
           cd ./wasm/parser && pnpm build
-      - uses: ./.github/actions/pnpm
       - name: Check output types
-        run: npx -y -p typescript tsc --lib es2020,dom crates/oxc_wasm/pkg/oxc_wasm.d.ts
+        run: |
+          pnpm install
+          npx -y -p typescript tsc --lib es2020,dom npm/oxc-wasm/oxc_wasm.d.ts
 
   typos:
     name: Spell Check
