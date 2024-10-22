@@ -7,6 +7,12 @@ use serde::{Deserialize, Serialize};
 use tsify::Tsify;
 use wasm_bindgen::prelude::*;
 
+#[wasm_bindgen::prelude::wasm_bindgen(typescript_custom_section)]
+const TS_APPEND_CONTENT: &'static str = r#"
+import type { Program } from "oxc";
+export * from "oxc";
+"#;
+
 #[derive(Debug, Default, Clone, Deserialize, Tsify)]
 #[tsify(from_wasm_abi)]
 #[serde(rename_all = "camelCase")]
@@ -23,7 +29,7 @@ pub struct ParserOptions {
 #[wasm_bindgen(getter_with_clone)]
 pub struct ParseResult {
     #[wasm_bindgen(readonly, skip_typescript)]
-    #[tsify(type = "import(\"oxc\").Program")]
+    #[tsify(type = "Program")]
     pub program: JsValue,
 
     #[wasm_bindgen(readonly, skip_typescript)]
