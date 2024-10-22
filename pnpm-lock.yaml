@@ -4,6 +4,15 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+catalogs:
+  default:
+    '@napi-rs/cli':
+      specifier: 3.0.0-alpha.61
+      version: 3.0.0-alpha.61
+    vitest:
+      specifier: 2.1.2
+      version: 2.1.2
+
 importers:
 
   .:
@@ -14,12 +23,6 @@ importers:
       vitest:
         specifier: 'catalog:'
         version: 2.1.2(@types/node@22.7.7)
-
-  crates/oxc_wasm/pkg:
-    devDependencies:
-      '@types/oxc':
-        specifier: workspace:^
-        version: link:../../../npm/oxc-types
 
   editors/vscode:
     dependencies:
@@ -60,6 +63,12 @@ importers:
   npm/oxc-transform: {}
 
   npm/oxc-types: {}
+
+  npm/oxc-wasm:
+    devDependencies:
+      '@types/oxc':
+        specifier: workspace:^
+        version: link:../oxc-types
 
   npm/oxlint: {}
 
