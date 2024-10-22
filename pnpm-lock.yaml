@@ -4,15 +4,6 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
-catalogs:
-  default:
-    '@napi-rs/cli':
-      specifier: 3.0.0-alpha.61
-      version: 3.0.0-alpha.61
-    vitest:
-      specifier: 2.1.2
-      version: 2.1.2
-
 importers:
 
   .:
@@ -57,6 +48,12 @@ importers:
   napi/parser: {}
 
   napi/transform: {}
+
+  npm/parser-wasm:
+    dependencies:
+      '@types/oxc':
+        specifier: link:../oxc-types
+        version: link:../oxc-types
 
   tasks/benchmark/codspeed:
     devDependencies:

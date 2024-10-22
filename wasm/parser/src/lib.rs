@@ -23,7 +23,7 @@ pub struct ParserOptions {
 #[wasm_bindgen(getter_with_clone)]
 pub struct ParseResult {
     #[wasm_bindgen(readonly, skip_typescript)]
-    #[tsify(type = "Program")]
+    #[tsify(type = "import(\"oxc\").Program")]
     pub program: JsValue,
 
     #[wasm_bindgen(readonly, skip_typescript)]
