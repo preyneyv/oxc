@@ -31,7 +31,6 @@ num-bigint = { workspace = true }
 
 serde = { workspace = true, features = ["derive"], optional = true }
 serde_json = { workspace = true, optional = true }
-wasm-bindgen = { workspace = true, optional = true }
 
 [features]
 default = []
