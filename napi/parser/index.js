@@ -1,4 +1,4 @@
-const bindings = require("./bindings.js");
+const bindings = require('./bindings.js');
 
 module.exports.moduleLexerAsync = bindings.moduleLexerAsync;
 module.exports.moduleLexerSync = bindings.moduleLexerSync;
