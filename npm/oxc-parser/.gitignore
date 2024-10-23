@@ -1,4 +1,4 @@
 node_modules/
 index.js
-bindings.cjs
+bindings.js
 index.d.ts
