@@ -2,7 +2,6 @@
   "name": "oxc-parser",
   "version": "0.32.0",
   "description": "Oxc Parser Node API",
-	"type": "module",
   "keywords": [
     "Parser"
   ],
@@ -22,7 +21,7 @@
   "files": [
     "index.d.ts",
     "index.js",
-		"bindings.cjs"
+    "bindings.js"
   ],
   "devDependencies": {
     "@oxc/types": "workspace:^"
