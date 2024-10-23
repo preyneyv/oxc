@@ -27,10 +27,10 @@ impl Generator for TypescriptGenerator {
         let file = file!().replace('\\', "/");
         let mut content = format!(
             "\
-        		// Auto-generated code, DO NOT EDIT DIRECTLY!\n\
-        		// To edit this generated file you have to edit `{file}`\n\n\
-						{CUSTOM_TYPESCRIPT}\n\
-						"
+            // Auto-generated code, DO NOT EDIT DIRECTLY!\n\
+            // To edit this generated file you have to edit `{file}`\n\n\
+            {CUSTOM_TYPESCRIPT}\n\
+            "
         );
 
         for def in ctx.schema() {
