@@ -2,7 +2,7 @@
   "name": "@oxc-parser/binding",
   "packageManager": "pnpm@9.9.0",
   "private": true,
-	"type": "module",
+  "type": "module",
   "scripts": {
     "build": "napi build --platform --release --js bindings.cjs",
     "test": "vitest run ./test"
